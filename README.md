@@ -559,3 +559,4 @@ training without resetting AdamW, so continuation is explicitly rejected.
 For a fresh new-version run, choose a **new** `output.scaling_directory` (and
 `output.directory` for standalone training) and clear `output.legacy_directories`
 in the config so historical checkpoints are not selected. No outputs need deletion.
+# radiolejepa_NS
