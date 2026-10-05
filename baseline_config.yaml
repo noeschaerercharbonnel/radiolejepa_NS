@@ -1,0 +1,72 @@
+dataset:
+  # The ten original RGZ20k data_batch_* files; no image export is required.
+  batches_root: /home/schaern8/code_NS/datasets/rgz20k-batches-py
+  sample_size: 16000  # Actual training images, excluding the fixed validation set.
+  validation_fraction: 0.20  # Fixed 4,000-image holdout from the full RGZ20k pool.
+  split_seed: 14  # Independent of model, N, and training seed.
+  num_workers: 8
+
+model:
+  name: vit_tiny_patch16_224
+  image_size: 224
+  projection_dim: 128
+  mlp_hidden_dim: 2048
+  drop_path_rate: 0.1
+
+# Fixed to the original RadioLeJEPA HFDataset recipe.
+views:
+  image_size: 224
+  local_image_size: 98
+  global_views: 2
+  local_views: 8
+  global_crop_scale: [0.50, 1.00]
+  local_crop_scale: [0.40, 0.70]
+  color_jitter_probability: 0.80
+  brightness_jitter: 0.40
+  contrast_jitter: 0.40
+  saturation_jitter: 0.20
+  hue_jitter: 0.10
+  blur_probability: 0.50
+  blur_kernel_size: 7
+  blur_sigma: [0.10, 2.00]
+  horizontal_flip_probability: 0.50
+  normalization_mean: [0.485, 0.456, 0.406]
+  normalization_std: [0.229, 0.224, 0.225]
+
+training:
+  batch_size: 16
+  epochs: 200  # Total target; increasing it resumes checkpoint_last.pt.
+  learning_rate: 3.0e-5
+  minimum_learning_rate: 1.0e-6
+  warmup_epochs: 1
+  weight_decay: 5.0e-2
+  lambda_sigreg: 0.05
+  sigreg_knots: 17
+  sigreg_directions: 256
+  seed: 14
+  device: auto
+  max_steps_per_epoch: null
+  checkpoint_interval: 0  # Extra snapshots only; checkpoint_last is saved every epoch.
+
+scaling:  # Standalone defaults; run_mimosa.sh supplies its own model/size lists.
+  subset_sizes: [2500, 5000, 7500, 10000, 13000, 16000]  # Actual training counts.
+  models:
+    - vit_tiny_patch16_224
+    - vit_small_patch16_224
+    - vit_base_patch16_224
+  include_large: false
+  skip_unavailable_sizes: true
+  skip_completed_runs: true
+
+wandb:
+  enabled: true
+  entity: noe-schaerer-unige
+  project: radiolejepa
+  mode: online  # Use offline for disconnected jobs; disabled to suppress W&B.
+
+output:
+  directory: null  # Derive <model>/n_<N>/seed_<seed>/pretraining.
+  scaling_directory: ../outputs/rgz20k_full_scaling
+  results_directory: ../outputs/results
+  # Optional additional output roots; checkpoint metadata validates actual counts.
+  legacy_directories: []

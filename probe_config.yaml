@@ -1,0 +1,46 @@
+dataset:
+  root: /home/schaern8/code_NS/datasets/mirabest-batches-py
+  validation_fraction: 0.20
+  split_seed: 14
+  num_workers: 8
+
+model:
+  checkpoint: ../outputs/rgz20k_full_scaling/vit_tiny_patch16_224/n_16000/seed_14/pretraining/checkpoint_best_validation.pt
+
+training:
+  methods: [linear, finetune]
+  batch_size: 128
+  epochs: 50
+  patience: 10
+  learning_rate: 1.0e-3
+  minimum_learning_rate: 1.0e-6
+  weight_decay: 1.0e-6
+  class_weighting: true
+  seed: 14
+  device: auto
+  # Optional keys are timm model names; each value overrides the rate(s) below.
+  # Select rates using validation performance, without consulting the test set.
+  model_learning_rates: {}  # e.g. vit_tiny_patch16_224: {learning_rate: 1.0e-4}
+
+finetuning:
+  batch_size: 16
+  backbone_learning_rate: 1.0e-5  # Applied to backbone AND retained projector.
+  learning_rate: 1.0e-3
+  weight_decay: 1.0e-6
+  epochs: 50
+  patience: 10
+  model_learning_rates: {}  # Also accepts backbone_learning_rate.
+
+wandb:
+  enabled: true
+  entity: noe-schaerer-unige
+  project: radiolejepa
+  mode: online
+
+output:
+  directory: ../outputs/rgz20k_full_scaling/vit_tiny_patch16_224/n_16000/seed_14/probe
+
+scaling:
+  train_fractions: [0.10, 0.25, 0.50, 0.75, 1.00]
+  selection_metric: balanced_accuracy
+  skip_completed_runs: true

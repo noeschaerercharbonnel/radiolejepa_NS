@@ -1,0 +1,11 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+logs/
+data_cache/
+wandb/
+*.pt
+*.pth
+.env
+.env.*
