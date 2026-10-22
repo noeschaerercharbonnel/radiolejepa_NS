@@ -1,4 +1,4 @@
-"""Binary MiraBest data for the downstream linear probe."""
+"""Binary MiraBest data with confident-only or legacy all-source selection."""
 
 from __future__ import annotations
 
@@ -29,10 +29,11 @@ class MiraBestRecord:
     label: int
 
 
-def _binary_label(label: int) -> int | None:
-    if label <= 4:
+def _binary_label(label: int, *, confident_only: bool = True) -> int | None:
+    """Map certain sources by default, or include uncertain sources as before."""
+    if label in ((0, 1, 2) if confident_only else (0, 1, 2, 3, 4)):
         return 0
-    if label <= 7:
+    if label in ((5, 6) if confident_only else (5, 6, 7)):
         return 1
     return None
 
@@ -46,13 +47,15 @@ def _load_batch(path: str) -> tuple[np.ndarray, np.ndarray]:
     return images, labels
 
 
-def _load_records(root: Path, batch_names: Sequence[str], split: str) -> list[MiraBestRecord]:
+def _load_records(
+    root: Path, batch_names: Sequence[str], split: str, *, confident_only: bool = True,
+) -> list[MiraBestRecord]:
     records = []
     for batch_name in batch_names:
         path = root / batch_name
         _, labels = _load_batch(str(path.resolve()))
         for index, fine_label in enumerate(labels):
-            label = _binary_label(int(fine_label))
+            label = _binary_label(int(fine_label), confident_only=confident_only)
             if label is not None:
                 records.append(
                     MiraBestRecord(
@@ -71,10 +74,11 @@ def load_mirabest_probe_records(
     *,
     validation_fraction: float,
     split_seed: int,
+    confident_only: bool = True,
 ) -> tuple[list[MiraBestRecord], list[MiraBestRecord], list[MiraBestRecord]]:
     root = Path(root).expanduser().resolve()
-    published_train = _load_records(root, TRAIN_BATCHES, "train")
-    test = _load_records(root, (TEST_BATCH,), "test")
+    published_train = _load_records(root, TRAIN_BATCHES, "train", confident_only=confident_only)
+    test = _load_records(root, (TEST_BATCH,), "test", confident_only=confident_only)
 
     order = np.random.default_rng(split_seed).permutation(len(published_train))
     validation_size = round(validation_fraction * len(published_train))

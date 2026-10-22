@@ -122,6 +122,7 @@ def load_probe_records(config: dict) -> list[MiraBestRecord]:
         root=values["root"],
         validation_fraction=float(values["validation_fraction"]),
         split_seed=int(values["split_seed"]),
+        confident_only=bool(values.get("confident_only", True)),
     )
     return train + validation + test
 
@@ -151,6 +152,8 @@ def parse_args() -> argparse.Namespace:
         default="../outputs/mirabest_probe_grid.png",
     )
     parser.add_argument("--examples-per-class", type=int, default=2)
+    parser.add_argument("--confident-only", action=argparse.BooleanOptionalAction, default=None,
+                        help="Use certain sources; --no-confident-only restores the previous selection.")
     return parser.parse_args()
 
 
@@ -171,6 +174,8 @@ if __name__ == "__main__":
         print(f"Saved RGZ20k augmentation grid: {saved}")
     if arguments.dataset in ("probe", "both"):
         config = load_config(arguments.probe_config)
+        if arguments.confident_only is not None:
+            config["dataset"]["confident_only"] = arguments.confident_only
         saved = save_probe_grid(
             load_probe_records(config),
             arguments.probe_output,

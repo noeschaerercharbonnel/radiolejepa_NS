@@ -15,6 +15,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from experiment_tracking import log_epoch, tracked_run
+from checkpoint_compat import find_saved_evaluation, mirabest_subset_name
 
 from lejepa_baseline import (
     ModelConfig,
@@ -34,28 +35,48 @@ from mirabest_probe_data import (
 )
 
 
+PROBE_REPRESENTATIONS = ("backbone", "projector")
+
+
+def get_probe_representation(config: dict, override: str | None = None) -> str:
+    representation = override if override is not None else config.get("model", {}).get("representation", "backbone")
+    if representation not in PROBE_REPRESENTATIONS:
+        raise ValueError(f"Unknown representation: {representation!r}; choose backbone or projector")
+    return representation
+
+
 class LinearProbe(nn.Module):
-    def __init__(self, encoder: ViTEncoder, num_classes: int, *, method="linear") -> None:
+    def __init__(self, encoder: ViTEncoder, num_classes: int, *, method="linear",
+                 representation="backbone") -> None:
         super().__init__()
         if method not in ("linear", "finetune"):
             raise ValueError(f"Unknown evaluation method: {method}")
         self.method = method
+        self.representation = get_probe_representation({}, representation)
         self.encoder = encoder
-        projection_dim = next(layer.out_features for layer in reversed(list(encoder.proj.modules())) if isinstance(layer, nn.Linear))
+        feature_dim = (encoder.embed_dim if representation == "backbone" else
+                       next(layer.out_features for layer in reversed(list(encoder.proj.modules()))
+                            if isinstance(layer, nn.Linear)))
         self.classifier = nn.Sequential(
-            nn.LayerNorm(projection_dim),
-            nn.Linear(projection_dim, num_classes),
+            nn.LayerNorm(feature_dim),
+            nn.Linear(feature_dim, num_classes),
         )
-        self.encoder.requires_grad_(False)
+        self.encoder.requires_grad_(False) # freezing parameters by default
         if method == "finetune":
-            self.encoder.requires_grad_(True)
+            self.encoder.backbone.requires_grad_(True)
+            if representation == "projector":
+                self.encoder.proj.requires_grad_(True)
         else:
             self.encoder.eval()
+        if representation == "backbone":
+            self.encoder.proj.eval()
 
     def train(self, mode: bool = True) -> "LinearProbe":
         super().train(mode)
         if self.method == "linear":
             self.encoder.eval()
+        elif self.representation == "backbone":
+            self.encoder.proj.eval()
         return self
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
@@ -67,6 +88,8 @@ class LinearProbe(nn.Module):
         return self.classifier(embeddings)
 
     def _project(self, images: torch.Tensor) -> torch.Tensor:
+        if self.representation == "backbone":
+            return self.encoder.backbone(images)
         # Keep all labelled samples: BatchNorm uses running statistics for a
         # singleton final batch, while its affine parameters still get gradients.
         singleton_norms = [layer for layer in self.encoder.proj.modules()
@@ -197,15 +220,21 @@ def _load_pretraining_checkpoint(checkpoint_path: str | Path) -> dict[str, Any]:
     return checkpoint
 
 
-def _load_encoder(checkpoint: dict[str, Any]) -> ViTEncoder:
+def _load_encoder(checkpoint: dict[str, Any], representation: str = "backbone") -> ViTEncoder:
     """Construct an encoder from a normalized pretraining checkpoint."""
     encoder = ViTEncoder(ModelConfig(**checkpoint["model_config"]))
     # Older distributed runs may prefix every state key with module.
     state = {key.removeprefix("module."): value
              for key, value in checkpoint["state_dict"].items()}
-    if not any(key.startswith("proj.") for key in state):
-        raise ValueError("Projector-output evaluation requires pretrained projector weights; this checkpoint contains no proj.* weights.")
-    encoder.load_state_dict(state, strict=True)
+    representation = get_probe_representation({}, representation)
+    if representation == "backbone":
+        backbone_state = {key.removeprefix("backbone."): value
+                          for key, value in state.items() if key.startswith("backbone.")}
+        encoder.backbone.load_state_dict(backbone_state, strict=True)
+    else:
+        if not any(key.startswith("proj.") for key in state):
+            raise ValueError("Projector-output evaluation requires pretrained projector weights; this checkpoint contains no proj.* weights.")
+        encoder.load_state_dict(state, strict=True)
     return encoder
 
 
@@ -216,6 +245,7 @@ def _split_probe_records(
         root=dataset_config["root"],
         validation_fraction=float(dataset_config["validation_fraction"]),
         split_seed=int(dataset_config["split_seed"]),
+        confident_only=bool(dataset_config.get("confident_only", True)),
     )
 
 
@@ -259,9 +289,10 @@ def fit_probe(
     parameters = [{"params": model.classifier.parameters(),
                    "lr": float(training_config["learning_rate"])}]
 
-    # TO CHECK
     if model.method == "finetune":
-        parameters.append({"params": model.encoder.parameters(),
+        encoder_parameters = (model.encoder.backbone.parameters() if model.representation == "backbone"
+                              else model.encoder.parameters())
+        parameters.append({"params": encoder_parameters,
                            "lr": float(training_config.get("backbone_learning_rate", 1e-5))})
     optimizer = torch.optim.AdamW(
         parameters,
@@ -325,10 +356,11 @@ def fit_probe(
                     key: value.detach().cpu().clone()
                     for key, value in model.encoder.backbone.state_dict().items()
                 }
-                best_projector_state = {
-                    key: value.detach().cpu().clone()
-                    for key, value in model.encoder.proj.state_dict().items()
-                }
+                if model.representation == "projector":
+                    best_projector_state = {
+                        key: value.detach().cpu().clone()
+                        for key, value in model.encoder.proj.state_dict().items()
+                    }
             epochs_without_improvement = 0
         else:
             epochs_without_improvement += 1
@@ -341,7 +373,8 @@ def fit_probe(
     model.classifier.load_state_dict(best_classifier_state)
     if model.method == "finetune":
         model.encoder.backbone.load_state_dict(best_backbone_state)
-        model.encoder.proj.load_state_dict(best_projector_state)
+        if model.representation == "projector":
+            model.encoder.proj.load_state_dict(best_projector_state)
     test_metrics = run_probe_epoch(
         model,
         loaders["test"],
@@ -366,9 +399,13 @@ def train_probe(
     output_dir_override: str | Path | None = None,
     train_fraction_override: float | None = None,
     method: str = "linear",
+    representation_override: str | None = None,
 ) -> Path:
     """Prepare data/model, delegate training to fit_probe, and save results."""
     dataset_config = config["dataset"]
+    confident_only = bool(dataset_config.get("confident_only", True))
+    subset = mirabest_subset_name(confident_only)
+    representation = get_probe_representation(config, representation_override)
     if method not in ("linear", "finetune"):
         raise ValueError(f"Unknown evaluation method: {method}")
     training_config = dict(config["training"])
@@ -397,23 +434,25 @@ def train_probe(
         raise ValueError(f"Unknown model learning-rate overrides: {sorted(unexpected)}")
     training_config.update(overrides)
     pretraining_epoch = checkpoint.get("epoch")
-    if checkpoint.get("format_version", 1) >= 2:
-        output_dir = output_dir / f"epochs_{pretraining_epoch}"
-    output_dir = output_dir / "projector"
     stem = "linear_probe" if method == "linear" else "finetune"
+    if bool(config.get("scaling", {}).get("skip_completed_runs", True)):
+        existing = find_saved_evaluation(
+            output_dir, f"{stem}_metrics.json", representation,
+            confident_only=confident_only, pretraining_epoch=pretraining_epoch,
+            train_fraction=train_fraction, require_checkpoint=True,
+        )
+        if existing is not None:
+            return existing.with_name(f"{stem}.pt")
+    if pretraining_epoch is not None:
+        output_dir = output_dir / f"epochs_{pretraining_epoch}"
+    output_dir = output_dir / representation / subset
     output_path = output_dir / f"{stem}.pt"
     metrics_path = output_dir / f"{stem}_metrics.json"
-    if (
-        bool(config.get("scaling", {}).get("skip_completed_runs", True))
-        and output_path.is_file()
-        and metrics_path.is_file()
-    ):
-        return output_path
 
     seed = int(training_config["seed"])
     seed_everything(seed)
     device = choose_device(str(training_config.get("device", "auto")))
-    encoder = _load_encoder(checkpoint)
+    encoder = _load_encoder(checkpoint, representation)
     transform = build_probe_transform(checkpoint["augmentation"])
 
     full_train_records, validation_records, test_records = _split_probe_records(
@@ -440,12 +479,14 @@ def train_probe(
         for role, dataset in datasets.items()
     }
 
-    model = LinearProbe(encoder, len(labels), method=method).to(device)
+    model = LinearProbe(encoder, len(labels), method=method,
+                        representation=representation).to(device)
     with tracked_run(
         config.get("wandb", {}), output_dir,
-        name=f"{method}-{model_name}-rgz_train_{checkpoint['data'].get('train_size', checkpoint['data']['sample_size'])}-val_{checkpoint['data'].get('validation_size', 0)}-mb_train_fraction_{train_fraction:g}-seed_{seed}-pretrain_epoch_{pretraining_epoch}",
+        name=f"{method}-{representation}-{subset}-{model_name}-rgz_train_{checkpoint['data'].get('train_size', checkpoint['data']['sample_size'])}-val_{checkpoint['data'].get('validation_size', 0)}-mb_train_fraction_{train_fraction:g}-seed_{seed}-pretrain_epoch_{pretraining_epoch}",
         job_type=method,
-        config={"stage": method, "architecture": model_name, "dataset": "MiraBest",
+        config={"stage": method, "representation": representation,
+                "architecture": model_name, "dataset": subset,
                 **training_config, "train_fraction": train_fraction,
                 "pretraining_epoch": pretraining_epoch,
                 "pretraining_data": checkpoint["data"],
@@ -461,12 +502,14 @@ def train_probe(
         output_dir.mkdir(parents=True, exist_ok=True)
         probe_metadata = {
             "source": "MiraBest binary FR-I/FR-II benchmark",
+            "subset": subset,
+            "confident_only": confident_only,
             "root": str(dataset_config["root"]),
             "preprocessing": "published sigma-clipped uint8 images scaled to [0, 1]",
             "image_shape": list(PROBE_IMAGE_SHAPE),
             "train_batches": [f"data_batch_{index}" for index in range(1, 8)],
             "test_batch": "test_batch",
-            "excluded_fine_labels": [8, 9],
+            "excluded_fine_labels": [3, 4, 7, 8, 9] if confident_only else [8, 9],
             "train_fraction": train_fraction,
             "available_train_samples": len(full_train_records),
             "split_sizes": {
@@ -479,10 +522,11 @@ def train_probe(
         torch.save(
             {
                 "method": method,
-                "representation": "projector",
+                "representation": representation,
                 "training_config": training_config,
                 "backbone_state_dict": result.best_backbone_state,
-                "projector_state_dict": {key: value.detach().cpu() for key, value in model.encoder.proj.state_dict().items()},
+                "projector_state_dict": ({key: value.detach().cpu() for key, value in model.encoder.proj.state_dict().items()}
+                                         if representation == "projector" else None),
                 "encoder_checkpoint": str(checkpoint_path),
                 "encoder_model": checkpoint["model_config"],
                 "pretraining_data": checkpoint["data"],
@@ -503,7 +547,7 @@ def train_probe(
             json.dumps(
                 {
                     "method": method,
-                    "representation": "projector",
+                    "representation": representation,
                     "training_config": training_config,
                     "encoder_checkpoint": str(checkpoint_path),
                     "pretraining_data": checkpoint["data"],
@@ -540,18 +584,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--train-fraction", type=float, default=None)
     parser.add_argument("--method", choices=("linear", "finetune"), default="linear")
+    parser.add_argument("--representation", choices=PROBE_REPRESENTATIONS,
+                        help="Override model.representation (default: backbone).")
+    parser.add_argument("--confident-only", action=argparse.BooleanOptionalAction, default=None,
+                        help="Use certain sources; --no-confident-only restores the previous selection.")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     arguments = parse_args()
+    config = load_config(arguments.config)
+    if arguments.confident_only is not None:
+        config["dataset"]["confident_only"] = arguments.confident_only
     output = train_probe(
-        load_config(arguments.config),
+        config,
         checkpoint_override=arguments.checkpoint,
         max_steps_override=arguments.max_steps,
         max_eval_steps_override=arguments.max_eval_steps,
         output_dir_override=arguments.output_dir,
         train_fraction_override=arguments.train_fraction,
         method=arguments.method,
+        representation_override=arguments.representation,
     )
     print(f"Saved MiraBest {arguments.method} evaluation: {output}")

@@ -1,11 +1,24 @@
+# Local system files and Python environments.
 .DS_Store
 __pycache__/
 *.py[cod]
 .venv/
-logs/
-data_cache/
-wandb/
-*.pt
-*.pth
+venv/
 .env
 .env.*
+
+# Local logs, caches and experiment tracking.
+logs/
+data_cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+wandb/
+
+# Dataset archives and training artifacts. Exported PNG plots remain tracked.
+datasets/
+*.pt
+*.pth
+*.ckpt
+/outputs/rgz20k_full_scaling/
+/outputs/wandb_smoke/

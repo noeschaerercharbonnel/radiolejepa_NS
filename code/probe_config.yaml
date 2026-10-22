@@ -1,10 +1,12 @@
 dataset:
   root: /home/schaern8/code_NS/datasets/mirabest-batches-py
+  confident_only: true  # false restores the previous selection, including uncertain FR-I/FR-II.
   validation_fraction: 0.20
   split_seed: 14
   num_workers: 8
 
 model:
+  representation: backbone  # backbone pooled features or the pretrained SSL projector.
   checkpoint: ../outputs/rgz20k_full_scaling/vit_tiny_patch16_224/n_16000/seed_14/pretraining/checkpoint_best_validation.pt
 
 training:
@@ -24,7 +26,7 @@ training:
 
 finetuning:
   batch_size: 16
-  backbone_learning_rate: 1.0e-5  # Applied to backbone AND retained projector.
+  backbone_learning_rate: 1.0e-5  # Backbone; also projector when representation: projector.
   learning_rate: 1.0e-3
   weight_decay: 1.0e-6
   epochs: 50

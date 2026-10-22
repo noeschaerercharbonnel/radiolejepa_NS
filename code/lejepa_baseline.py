@@ -401,8 +401,10 @@ def resume_pretraining(
         if epochs != int(old_training["epochs"]):
             # Stretch the existing cosine schedule, retaining optimizer moments/steps.
             cosine = scheduler._schedulers[-1] if isinstance(scheduler, SequentialLR) else scheduler
+            # cosine duration = updates per epoch × epochs after warmup
             cosine.T_max = max(steps_per_epoch * (epochs - int(training_config.get("warmup_epochs", 0))), 1)
             if not isinstance(scheduler, SequentialLR) or scheduler.last_epoch >= steps_per_epoch * int(training_config.get("warmup_epochs", 0)):
+                # implements the cosine schedule
                 rates = [cosine.eta_min + (base - cosine.eta_min) * (1 + math.cos(math.pi * cosine.last_epoch / cosine.T_max)) / 2 for base in cosine.base_lrs]
                 for group, rate in zip(optimizer.param_groups, rates):
                     group["lr"] = rate
