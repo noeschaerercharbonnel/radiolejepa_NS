@@ -1,6 +1,6 @@
 # RadioLeJEPA: pretraining and downstream classification study
 
-Code and figures for a PhD application coding task studying how pretraining
+Code and figures for FUNDIS PhD application coding task studying how pretraining
 dataset size, ViT size and supervised adaptation affect radio-galaxy
 classification. ViT-Tiny, ViT-Small and ViT-Base are pretrained on RGZ20k and
 evaluated on the binary FR-I/FR-II task in MiraBest.
@@ -44,8 +44,8 @@ radiolejepa_NS/
 
 The repository includes source code, configurations and exported figures.
 Datasets, trained checkpoints and per-run metric histories are not bundled.
-This README describes the current folder layout; the longer
-[implementation notes](code/README.md) also contain historical examples.
+This README describes the experimental design and folder layout. See the
+[code quick start](code/README.md) for a shorter setup and command reference.
 
 ## Experimental design
 
