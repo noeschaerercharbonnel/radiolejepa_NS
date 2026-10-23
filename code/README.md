@@ -1,30 +1,25 @@
-# RadioLeJEPA code
+# Train and evaluate
 
-Pretrain ViT models on RGZ20k and evaluate FR-I/FR-II classification on MiraBest.
-See the [project README](../README.md) for the experimental design, attribution
-and saved figures.
+Run all commands from `code/`. See the [project README](../README.md) for
+installation, data requirements and the experimental design.
 
-## Setup
+## Complete pipeline
 
-Use Python 3.10+. From the repository root:
+On the CUDA training machine:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r code/requirements.txt
-cd code
+bash run_mimosa.sh all
 ```
 
-Set your dataset paths in:
+This runs the full model/pretraining-size grid, probing and fine-tuning at
+each labelled training fraction, and result plotting. Compatible completed
+runs are reused.
 
-- [baseline_config.yaml](baseline_config.yaml): `dataset.batches_root` for RGZ20k.
-- [probe_config.yaml](probe_config.yaml): `dataset.root` for MiraBest.
+Choose `MODELS` and `SUBSET_SIZES` in [run_mimosa.sh](run_mimosa.sh).
+Choose `dataset.confident_only` and `model.representation` in
+[probe_config.yaml](probe_config.yaml); these settings apply to the complete pipeline.
 
-These files also define training settings and output paths. Set
-`wandb.enabled: false` in both files, or configure your own W&B account.
-Run all commands below from `code/`.
-
-## Train and evaluate
+## Individual experiments
 
 ```bash
 # One pretraining configuration, followed by probing and fine-tuning.
@@ -42,9 +37,7 @@ python run_probe_scaling.py \
 - `--no-confident-only`: confident + uncertain FR-I/FR-II sources; hybrids excluded.
 - `--representation projector`: evaluate projector outputs instead of backbone features.
 
-Compatible checkpoints and completed evaluations are reused. Outputs are
-separated by dataset selection and representation under `../outputs/`.
-See the project README for GPU sweeps with `run_mimosa.sh`.
+Outputs are separated by dataset selection and representation under `../outputs/`.
 
 ## Plot saved results
 
